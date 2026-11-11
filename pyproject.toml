@@ -1,0 +1,64 @@
+[project]
+name = "paydar-workspace"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["paydar-contracts", "paydar-vault-api"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-socket>=0.7",
+  "hypothesis>=6.112",
+  "ruff>=0.7",
+  "mypy>=1.13",
+  "import-linter>=2.1",
+  "pip-audit>=2.7",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["libs/*", "services/*", "tools/*"]
+
+[tool.uv.sources]
+paydar-contracts = { workspace = true }
+paydar-vault-api = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "PL", "RUF"]
+ignore = ["E501"]  # ruff format owns line length; long literal strings (OFX markup) are allowed
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "S603", "S607", "PLR2004"]
+"tools/**" = ["S311"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --import-mode=importlib --disable-socket --allow-unix-socket"
+testpaths = ["tests", "libs", "services", "tools"]
+markers = [
+  "image: builds/runs container images; needs PAYDAR_IMAGE_TESTS=1",
+  "live_llm: talks to local Ollama; needs PAYDAR_LIVE_LLM=1",
+]
+
+[tool.importlinter]
+root_packages = ["paydar"]
+
+[[tool.importlinter.contracts]]
+name = "ledger is pure"
+type = "forbidden"
+source_modules = ["paydar.ledger"]
+forbidden_modules = ["paydar.crypto", "paydar.store", "paydar.ingest", "paydar.categorize", "paydar.insights", "paydar.api"]
+
+[[tool.importlinter.contracts]]
+name = "layers"
+type = "layers"
+layers = ["paydar.api", "paydar.insights : paydar.categorize : paydar.ingest", "paydar.store", "paydar.crypto"]
