@@ -26,6 +26,9 @@ jobs:
       - run: uv run pip-audit --strict --disable-pip -r "$RUNNER_TEMP/req.txt"
   secrets:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
