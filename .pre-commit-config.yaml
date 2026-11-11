@@ -1,4 +1,4 @@
-default_install_hook_types: [pre-commit, commit-msg]
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.4
@@ -10,6 +10,11 @@ repos:
     rev: v8.30.0
     hooks:
       - id: gitleaks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: no-commit-to-branch
+        args: [--branch, main]
   - repo: local
     hooks:
       - id: no-co-authored-by
@@ -17,3 +22,10 @@ repos:
         language: pygrep
         entry: '(?i)^co-authored-by:'
         stages: [commit-msg]
+      - id: no-push-to-main
+        name: block pushes to main
+        language: script
+        entry: scripts/hooks/no-push-to-main.sh
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
