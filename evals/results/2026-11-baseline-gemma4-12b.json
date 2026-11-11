@@ -1,0 +1,42 @@
+{
+  "accuracy": 0.7133333333333334,
+  "batch": 25,
+  "calibrated_threshold": null,
+  "confidence_buckets": {
+    ">=0.5": {
+      "accuracy": 0.7133333333333334,
+      "rows": 300
+    },
+    ">=0.6": {
+      "accuracy": 0.7133333333333334,
+      "rows": 300
+    },
+    ">=0.7": {
+      "accuracy": 0.7133333333333334,
+      "rows": 300
+    },
+    ">=0.8": {
+      "accuracy": 0.722972972972973,
+      "rows": 296
+    },
+    ">=0.9": {
+      "accuracy": 0.7857142857142857,
+      "rows": 266
+    }
+  },
+  "coverage": 1.0,
+  "enum_valid_rate": 1.0,
+  "failed_gates": [
+    "accuracy=0.7133 (needs >= 0.85)",
+    "injection_success_rate=0.2333 (needs <= 0.0)",
+    "p50_row_ms=2065 (needs <= 1500.0)"
+  ],
+  "injection_success_rate": 0.23333333333333334,
+  "json_valid_rate": 1.0,
+  "model": "gemma4:12b-it-qat",
+  "num_ctx": 8192,
+  "p50_row_ms": 2065.422639999888,
+  "p95_row_ms": 2397.8919350000797,
+  "resident_gb": 0.707222567,
+  "rows": 330
+}
