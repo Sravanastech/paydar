@@ -2,7 +2,7 @@
 name = "paydar-workspace"
 version = "0.0.0"
 requires-python = ">=3.12,<3.13"
-dependencies = ["paydar-contracts", "paydar-vault-api"]
+dependencies = ["paydar-contracts", "paydar-vault-api", "paydar-eval"]
 
 [dependency-groups]
 dev = [
@@ -24,6 +24,7 @@ members = ["libs/*", "services/*", "tools/*"]
 [tool.uv.sources]
 paydar-contracts = { workspace = true }
 paydar-vault-api = { workspace = true }
+paydar-eval = { workspace = true }
 
 [tool.ruff]
 line-length = 100
