@@ -5,6 +5,7 @@ requires-python = "==3.12.*"
 [manifest]
 members = [
     "paydar-contracts",
+    "paydar-fixtures",
     "paydar-vault-api",
     "paydar-workspace",
 ]
@@ -435,6 +436,11 @@ version = "0.0.0"
 source = { editable = "libs/contracts" }
 
 [[package]]
+name = "paydar-fixtures"
+version = "0.0.0"
+source = { editable = "tools/fixtures" }
+
+[[package]]
 name = "paydar-vault-api"
 version = "0.0.0"
 source = { editable = "services/vault-api" }
@@ -451,6 +457,7 @@ version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "paydar-contracts" },
+    { name = "paydar-fixtures" },
     { name = "paydar-vault-api" },
 ]
 
@@ -468,6 +475,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "paydar-contracts", editable = "libs/contracts" },
+    { name = "paydar-fixtures", editable = "tools/fixtures" },
     { name = "paydar-vault-api", editable = "services/vault-api" },
 ]
 
