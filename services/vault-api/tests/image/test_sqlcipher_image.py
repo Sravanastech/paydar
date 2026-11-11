@@ -106,3 +106,17 @@ def test_image_compile_options(platform: str) -> None:
     options = result.stdout.split()
     assert "TEMP_STORE=3" in options, options
     assert "HAS_CODEC" in options, options
+
+
+@pytest.mark.image
+@needs_images
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_binding_links_pinned_library(platform: str) -> None:
+    code = (
+        "import glob, subprocess, sqlcipher3; "
+        "so = glob.glob(sqlcipher3.__path__[0] + '/_sqlite3*.so')[0]; "
+        "print(subprocess.run(['ldd', so], capture_output=True, text=True).stdout)"
+    )
+    result = _run(platform, "python", "-c", code)
+    assert result.returncode == 0, result.stderr
+    assert "/opt/sqlcipher/lib/libsqlite3" in result.stdout, result.stdout

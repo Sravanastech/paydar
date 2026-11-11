@@ -54,13 +54,13 @@ jobs:
         env:
           PAYDAR_IMAGE_TESTS: "1"
           PAYDAR_PLATFORMS: linux/amd64,linux/arm64
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: paydar/vault-api:dev-amd64
           exit-code: "1"
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: paydar/vault-api:dev-arm64
           exit-code: "1"

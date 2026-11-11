@@ -20,15 +20,17 @@ RUN cd "sqlcipher-${SQLCIPHER_VERSION}" \
       CFLAGS="-DSQLITE_HAS_CODEC -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown" LDFLAGS="-lcrypto" \
  && make -j"$(nproc)" && make install
 COPY build-requirements.txt sqlcipher3-requirements.txt /src/
-# Binding: hash-pinned backend and sdist. The sdist hard-codes SQLITE_TEMP_STORE=2 in setup.py; the
-# build step raises it to 3 (never write temp files to disk) after the sdist hash has been verified.
+# Binding: hash-pinned backend and sdist. The sdist has no system-library mode: setup.py compiles a vendored
+# sqlite3.c amalgamation. After the sdist hash is verified, the build drops that amalgamation and links the
+# pinned upstream build in /opt/sqlcipher (SQLCipher 4.x installs it as libsqlite3) instead; its sqlite3.h replaces the vendored one (src includes ../vendor/sqlite3.h).
 RUN pip install --no-cache-dir --require-hashes --no-deps -r build-requirements.txt \
  && pip download --no-deps --no-build-isolation --no-binary :all: --require-hashes \
       -r sqlcipher3-requirements.txt -d /dl \
  && mkdir /dl/src && tar xzf /dl/sqlcipher3-*.tar.gz -C /dl/src --strip-components=1 \
- && sed -i "s/('SQLITE_TEMP_STORE', '2')/('SQLITE_TEMP_STORE', '3')/" /dl/src/setup.py \
- && grep -q "('SQLITE_TEMP_STORE', '3')" /dl/src/setup.py \
- && CFLAGS="-I/opt/sqlcipher/include -I/opt/sqlcipher/include/sqlcipher" LDFLAGS="-L/opt/sqlcipher/lib" \
+ && sed -i "s| + \['vendor/sqlite3.c'\]||; s|language='c')|libraries=['sqlite3'], language='c')|" /dl/src/setup.py \
+ && ! grep -q "vendor/sqlite3.c" /dl/src/setup.py && grep -q "libraries=\['sqlite3'\]" /dl/src/setup.py \
+ && cp /opt/sqlcipher/include/sqlite3.h /dl/src/vendor/sqlite3.h && rm /dl/src/vendor/sqlite3.c \
+ && CFLAGS="-I/opt/sqlcipher/include" LDFLAGS="-L/opt/sqlcipher/lib -Wl,-rpath,/opt/sqlcipher/lib" \
     pip wheel --no-build-isolation --no-deps --wheel-dir /wheels /dl/src
 
 FROM ${PYTHON_IMAGE} AS runtime
