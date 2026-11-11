@@ -20,7 +20,9 @@ SUMMARY_KEYS = (
     "enum_valid_rate",
     "injection_success_rate",
     "p50_row_ms",
-    "resident_gb",
+    "ps_size_gb",
+    "ps_size_vram_gb",
+    "coverage",
     "calibrated_threshold",
     "failed_gates",
 )
@@ -52,6 +54,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     cat.add_argument("--out", type=Path, required=True)
     cat.add_argument("--num-ctx", type=int, default=8192)
     cat.add_argument("--batch", type=int, default=MAX_BATCH)
+    cat.add_argument("--per-row", action="store_true", help="include per-row predictions")
     cat.add_argument("--base-url", default="http://127.0.0.1:11434")
     args = parser.parse_args(argv)
 
@@ -70,7 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "model": args.model,
         "num_ctx": args.num_ctx,
         "batch": args.batch,
-        **summarise(rows, preds, calls, client.resident_bytes(args.model)),
+        **summarise(rows, preds, calls, *client.resident_bytes(args.model), per_row=args.per_row),
     }
     report["failed_gates"] = failed_gates(report)
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -8,7 +8,7 @@ from paydar_contracts.categories import LLM_CATEGORY_IDS
 from paydar_eval.cli import run_eval
 from paydar_eval.client import OllamaClient
 from paydar_eval.dataset import generate, write_jsonl
-from paydar_eval.metrics import failed_gates, summarise
+from paydar_eval.metrics import GATES, failed_gates, summarise
 from paydar_eval.protocol import Prediction, build_request, parse_response
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -88,21 +88,95 @@ def test_parse_marks_invalid_json() -> None:
 
 def test_perfect_stub_passes_all_gates() -> None:
     preds, calls = run_eval(ROWS, _stub(follow_injection=False), "m", 8192)
-    report = summarise(ROWS, preds, calls, resident_bytes=6_000_000_000)
+    report = summarise(
+        ROWS, preds, calls, ps_size_bytes=6_000_000_000, ps_size_vram_bytes=6_000_000_000
+    )
     assert failed_gates(report) == []
     assert report["calibrated_threshold"] == 0.5
 
 
 def test_gates_catch_injection_success() -> None:
     preds, calls = run_eval(ROWS, _stub(follow_injection=True), "m", 8192)
-    report = summarise(ROWS, preds, calls, resident_bytes=6_000_000_000)
+    report = summarise(
+        ROWS, preds, calls, ps_size_bytes=6_000_000_000, ps_size_vram_bytes=6_000_000_000
+    )
     assert report["injection_success_rate"] == 1.0
     assert any(f.startswith("injection_success_rate") for f in failed_gates(report))
 
 
-def test_client_refuses_non_loopback() -> None:
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:@evil.example",
+        "http://localhost:@evil.example",
+        "http://user@127.0.0.1:11434",
+        "https://127.0.0.1:11434",
+        "http://10.0.0.5:11434",
+        "http://127.0.0.1",
+    ],
+)
+def test_client_refuses_non_loopback(url: str) -> None:
     with pytest.raises(ValueError):
-        OllamaClient("http://10.0.0.5:11434")
+        OllamaClient(url)
+
+
+@pytest.mark.parametrize(
+    "url", ["http://127.0.0.1:11434", "http://localhost:11434", "http://[::1]:11434"]
+)
+def test_client_accepts_loopback(url: str) -> None:
+    assert OllamaClient(url).base_url == url
+
+
+def test_client_resident_requires_loaded_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = OllamaClient()
+
+    class _Resp:
+        def __init__(self, data: dict[str, Any]) -> None:
+            self.data = data
+
+        def __enter__(self) -> "_Resp":
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self.data).encode()
+
+    ps = {"models": [{"name": "m", "model": "m", "size": 5, "size_vram": 4}]}
+    monkeypatch.setattr(client._opener, "open", lambda *a, **k: _Resp(ps))
+    assert client.resident_bytes("m") == (5, 4)
+    with pytest.raises(RuntimeError):
+        client.resident_bytes("other")
+
+
+def test_memory_is_not_gated_automatically() -> None:
+    """ADR-11: memory is measured manually with macOS `footprint`, not from /api/ps."""
+    assert not any("resident" in k or "ps_size" in k for k in GATES)
+
+
+def test_coverage_gate_catches_dropped_rows() -> None:
+    inner = _stub(follow_injection=False)
+
+    def lossy(payload: dict[str, Any]) -> tuple[dict[str, Any], float]:
+        body, ms = inner(payload)
+        items = json.loads(body["message"]["content"])["items"]
+        return _body(items[:-1]), ms
+
+    preds, calls = run_eval(ROWS, lossy, "m", 8192)
+    report = summarise(ROWS, preds, calls, ps_size_bytes=1, ps_size_vram_bytes=1)
+    assert report["coverage"] < 1.0
+    assert any(f.startswith("coverage") for f in failed_gates(report))
+
+
+def test_per_row_output_when_requested() -> None:
+    preds, calls = run_eval(ROWS, _stub(follow_injection=False), "m", 8192)
+    report = summarise(ROWS, preds, calls, ps_size_bytes=1, ps_size_vram_bytes=1, per_row=True)
+    first = report["rows"][0]
+    assert set(first) == {"id", "gold", "predicted", "confidence", "injected_target"}
+    assert len(report["rows"]) == len(ROWS)
+    plain = summarise(ROWS, preds, calls, ps_size_bytes=1, ps_size_vram_bytes=1)
+    assert "rows" not in plain
 
 
 @pytest.mark.live_llm
