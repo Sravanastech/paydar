@@ -1,0 +1,210 @@
+{
+  "statements": [
+    {
+      "account_class": "asset",
+      "account_id": "synthbank-checking",
+      "closing_cents": 950103,
+      "credits_cents": 750000,
+      "debits_cents": 299897,
+      "expected_delta_cents": 0,
+      "file_row_count": 16,
+      "format": "ofx",
+      "institution": "synthbank",
+      "opening_cents": 500000,
+      "path": "synthetic/synthbank/checking/2026-07.ofx",
+      "period_end": "2026-07-31",
+      "period_start": "2026-07-01",
+      "tags": [
+        "asset",
+        "cross_format"
+      ]
+    },
+    {
+      "account_class": "asset",
+      "account_id": "synthbank-checking",
+      "closing_cents": 950103,
+      "credits_cents": 750000,
+      "debits_cents": 299897,
+      "expected_delta_cents": 0,
+      "file_row_count": 16,
+      "format": "csv",
+      "institution": "synthbank",
+      "opening_cents": 500000,
+      "path": "synthetic/synthbank/checking/2026-07.csv",
+      "period_end": "2026-07-31",
+      "period_start": "2026-07-01",
+      "tags": [
+        "asset",
+        "cross_format"
+      ]
+    },
+    {
+      "account_class": "liability",
+      "account_id": "synthcard-credit_card",
+      "closing_cents": 38684,
+      "credits_cents": 65589,
+      "debits_cents": 71905,
+      "expected_delta_cents": 0,
+      "file_row_count": 13,
+      "format": "ofx",
+      "institution": "synthcard",
+      "opening_cents": 45000,
+      "path": "synthetic/synthcard/credit_card/2026-07.ofx",
+      "period_end": "2026-07-31",
+      "period_start": "2026-07-01",
+      "tags": [
+        "liability"
+      ]
+    },
+    {
+      "account_class": "asset",
+      "account_id": "synthbank-checking",
+      "closing_cents": 1178618,
+      "credits_cents": 500000,
+      "debits_cents": 271485,
+      "expected_delta_cents": 0,
+      "file_row_count": 15,
+      "format": "ofx",
+      "institution": "synthbank",
+      "opening_cents": 950103,
+      "path": "synthetic/synthbank/checking/2026-08.ofx",
+      "period_end": "2026-08-31",
+      "period_start": "2026-08-01",
+      "tags": [
+        "asset",
+        "cross_format"
+      ]
+    },
+    {
+      "account_class": "asset",
+      "account_id": "synthbank-checking",
+      "closing_cents": 1178618,
+      "credits_cents": 500000,
+      "debits_cents": 271485,
+      "expected_delta_cents": 0,
+      "file_row_count": 15,
+      "format": "csv",
+      "institution": "synthbank",
+      "opening_cents": 950103,
+      "path": "synthetic/synthbank/checking/2026-08.csv",
+      "period_end": "2026-08-31",
+      "period_start": "2026-08-01",
+      "tags": [
+        "asset",
+        "cross_format"
+      ]
+    },
+    {
+      "account_class": "liability",
+      "account_id": "synthcard-credit_card",
+      "closing_cents": 81951,
+      "credits_cents": 80563,
+      "debits_cents": 37296,
+      "expected_delta_cents": 0,
+      "file_row_count": 13,
+      "format": "ofx",
+      "institution": "synthcard",
+      "opening_cents": 38684,
+      "path": "synthetic/synthcard/credit_card/2026-08.ofx",
+      "period_end": "2026-08-31",
+      "period_start": "2026-08-01",
+      "tags": [
+        "liability"
+      ]
+    },
+    {
+      "account_class": "asset",
+      "account_id": "synthbank-checking",
+      "closing_cents": 1418972,
+      "credits_cents": 500000,
+      "debits_cents": 259646,
+      "expected_delta_cents": 0,
+      "file_row_count": 15,
+      "format": "ofx",
+      "institution": "synthbank",
+      "opening_cents": 1178618,
+      "path": "synthetic/synthbank/checking/2026-09.ofx",
+      "period_end": "2026-09-30",
+      "period_start": "2026-09-01",
+      "tags": [
+        "asset",
+        "cross_format"
+      ]
+    },
+    {
+      "account_class": "asset",
+      "account_id": "synthbank-checking",
+      "closing_cents": 1418972,
+      "credits_cents": 500000,
+      "debits_cents": 259646,
+      "expected_delta_cents": 0,
+      "file_row_count": 15,
+      "format": "csv",
+      "institution": "synthbank",
+      "opening_cents": 1178618,
+      "path": "synthetic/synthbank/checking/2026-09.csv",
+      "period_end": "2026-09-30",
+      "period_start": "2026-09-01",
+      "tags": [
+        "asset",
+        "cross_format"
+      ]
+    },
+    {
+      "account_class": "liability",
+      "account_id": "synthcard-credit_card",
+      "closing_cents": 126090,
+      "credits_cents": 75778,
+      "debits_cents": 31639,
+      "expected_delta_cents": 0,
+      "file_row_count": 14,
+      "format": "ofx",
+      "institution": "synthcard",
+      "opening_cents": 81951,
+      "path": "synthetic/synthcard/credit_card/2026-09.ofx",
+      "period_end": "2026-09-30",
+      "period_start": "2026-09-01",
+      "tags": [
+        "liability"
+      ]
+    },
+    {
+      "account_class": "asset",
+      "account_id": "synthbank-checking",
+      "closing_cents": 1418972,
+      "credits_cents": 500000,
+      "debits_cents": 259646,
+      "expected_delta_cents": -31639,
+      "file_row_count": 14,
+      "format": "csv",
+      "institution": "synthbank",
+      "opening_cents": 1178618,
+      "path": "synthetic/synthbank/checking/2026-09-broken.csv",
+      "period_end": "2026-09-30",
+      "period_start": "2026-09-01",
+      "tags": [
+        "asset",
+        "broken"
+      ]
+    },
+    {
+      "account_class": "asset",
+      "account_id": "synthbank-checking",
+      "closing_cents": 1207805,
+      "credits_cents": 500000,
+      "debits_cents": 285927,
+      "expected_delta_cents": 0,
+      "file_row_count": 18,
+      "format": "ofx",
+      "institution": "synthbank",
+      "opening_cents": 993732,
+      "path": "synthetic/synthbank/checking/2026-08-15_2026-09-14-overlap.ofx",
+      "period_end": "2026-09-14",
+      "period_start": "2026-08-15",
+      "tags": [
+        "asset",
+        "overlap"
+      ]
+    }
+  ]
+}
