@@ -120,3 +120,17 @@ def test_binding_links_pinned_library(platform: str) -> None:
     result = _run(platform, "python", "-c", code)
     assert result.returncode == 0, result.stderr
     assert "/opt/sqlcipher/lib/libsqlite3" in result.stdout, result.stdout
+
+
+@pytest.mark.image
+@needs_images
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_stdlib_sqlite3_is_not_sqlcipher(platform: str) -> None:
+    code = (
+        "import _sqlite3, subprocess; "
+        "print(subprocess.run(['ldd', _sqlite3.__file__], capture_output=True, text=True).stdout)"
+    )
+    result = _run(platform, "python", "-c", code)
+    assert result.returncode == 0, result.stderr
+    assert "libsqlite3" in result.stdout, result.stdout
+    assert "/opt/sqlcipher" not in result.stdout, result.stdout

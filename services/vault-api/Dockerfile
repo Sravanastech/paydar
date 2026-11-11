@@ -34,10 +34,9 @@ RUN pip install --no-cache-dir --require-hashes --no-deps -r build-requirements.
     pip wheel --no-build-isolation --no-deps --wheel-dir /wheels /dl/src
 
 FROM ${PYTHON_IMAGE} AS runtime
-COPY --from=build /opt/sqlcipher/lib/ /opt/sqlcipher/lib/
+COPY --from=build /opt/sqlcipher/lib/libsqlite3.so* /opt/sqlcipher/lib/
 RUN --mount=type=bind,from=build,source=/wheels,target=/wheels \
-    echo /opt/sqlcipher/lib > /etc/ld.so.conf.d/sqlcipher.conf && ldconfig \
- && pip install --no-cache-dir --no-index --find-links /wheels sqlcipher3 \
+    pip install --no-cache-dir --no-index --find-links /wheels sqlcipher3 \
  && groupadd -g 10001 paydar && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin paydar \
  && mkdir -p /data && chown 10001:10001 /data
 USER 10001:10001
