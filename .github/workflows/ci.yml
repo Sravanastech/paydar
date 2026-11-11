@@ -19,7 +19,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy -p paydar -p paydar_contracts -p paydar_fixtures
+      - run: uv run mypy -p paydar -p paydar_contracts -p paydar_fixtures -p paydar_eval
       - run: uv run lint-imports
       - run: uv run pytest -p no:cacheprovider
       - run: uv export --frozen --no-emit-workspace --format requirements-txt > "$RUNNER_TEMP/req.txt"
