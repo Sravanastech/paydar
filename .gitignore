@@ -1,0 +1,51 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets and configuration (never commit)
+.env
+.env.secret
+.secrets/
+vault.keyfile.json
+vault.state.json
+
+# Financial data and vault state (never commit)
+Financials/
+inbox/
+backups/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Owner-data evaluation output (never commit; ADR-11)
+evals/private/
+evals/results/*.private.json
+
+# Design docs live outside this repository
+docs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+.pnpm-store/
+apps/web/dist/
+playwright-report/
+test-results/
+
+# Local agent tooling
+.claude-flow/
