@@ -1,0 +1,597 @@
+# =============================================================================
+# Jarvis Financial Framework (JFF) v2.0 — container topology
+# Aligned to docs/00-ARCHITECTURE-REVIEW-AND-DECISIONS.md (JFF-ADR-000), ADR-03
+# and ADR-04 (separate `parser` container).
+#
+# Do not run `docker compose` directly; use `./jarvis up --profile <name>`.
+# `./jarvis up` first runs `./jarvis doctor`, which fails closed on placeholder
+# or missing secrets, an inbox/repo inside a cloud-synced folder, disk
+# encryption off, or a published port bound to anything but loopback (ADR-09).
+# FINANCIALS_HOST_DIR and JARVIS_OWNER_TAILNET_LOGIN are required (`:?`), so a
+# bare `docker compose config` without .env fails by design.
+# The wrapper selects exactly ONE runtime profile:
+#
+#   mac          llm-proxy-host  -> native Ollama on the macOS host (Metal GPU)
+#   windows-gpu  llm-proxy       -> ollama-gpu container (NVIDIA)
+#   cpu          llm-proxy       -> ollama container (CPU)
+#   lite-llm     llm-proxy       -> ollama container (CPU, small model, low caps)
+#   lite         (no LLM)        -> rules-only categorisation, no LLM services
+#
+#   automation   optional, unsupported n8n on its own network (ADR-07)
+#   models       one-shot `ollama pull` used by `./jarvis models pull`
+#
+# Services without a profile (edge, vault-api, parser, egress-gateway) always
+# run.
+#
+# Networks (ADR-03):
+#   edge_net      bridge     exists only so `edge` can publish 127.0.0.1:3000
+#   vault_net     internal   edge <-> vault-api <-> llm-proxy / egress-gateway
+#   llm_net       internal   llm-proxy <-> ollama (no route to the internet)
+#   egress_net    bridge     egress-gateway -> allowlisted cloud/push hosts;
+#                            also publishes 127.0.0.1:8088 (approval page)
+#   llm_host_net  bridge     mac profile only: lets llm-proxy-host reach
+#                            host.docker.internal:11434 (native Ollama)
+#   pull_net      bridge     one-shot model pulls only (`models` profile)
+#   automation_net bridge    optional n8n only; joined by nothing else
+#   (none)                   `parser` uses network_mode: none (no interfaces
+#                            except loopback); it talks to vault-api only via
+#                            the tmpfs-backed `parse_spool` volume (ADR-04)
+#
+# Published ports: ONLY 127.0.0.1:3000 (edge) and 127.0.0.1:8088 (approval
+# page). Nothing binds to 0.0.0.0. The approval page reaches the phone via
+# `tailscale serve --https=443 http://127.0.0.1:8088` on the host. Never
+# serve :3000 to the tailnet.
+#
+# Image pinning: every image / base image is pinned by digest. `<PIN_ME>`
+# placeholders are filled by `./jarvis pin-images`, which resolves each tag
+# to its current digest, writes it here, and records it in images.lock.
+# `./jarvis up` refuses to start while any `<PIN_ME>` remains.
+#
+# Secrets: Docker secrets, never environment variables (F-09). Files are
+# created by `./jarvis init` under ./.secrets/ (directory mode 0700, files
+# 0444 so uid 10001 can read the bind-mounted file inside the container while
+# other host users cannot traverse the directory). There is NO master-key
+# secret: the database key (DEK) is wrapped by a passphrase-derived KEK and
+# stored in vault.keyfile.json inside the vault volume; vault-api boots
+# LOCKED (ADR-02).
+#
+# Memory limits: edge 64M, llm-proxy 48M, egress-gateway 96M are the ADR-03
+# budgets rounded up. vault-api is capped at 640M to absorb the transient
+# Argon2id (m=256 MiB) allocation during unlock; its steady-state budget is
+# ~350 MB. parser is capped at 384M (OCR peaks); its budget is ~200 MB.
+# Steady-state budget of all JFF containers, excluding Ollama:
+#   edge 30 + vault-api 350 + parser 200 + llm-proxy 40 + egress-gateway 90
+#   = ~710 MB (target, unmeasured).
+# This is above the original <= 600 MB target in JFF-ADR-000 because the
+# parser is now its own container; ADR-04 expects vault-api to shrink by
+# roughly the parser's share once pdfplumber/RapidOCR leave its image, which
+# would bring the total back to about 510-600 MB. Measure in the Task 8
+# smoke test before tightening. Override in .env only if a measured workload
+# needs it.
+#
+# Service tokens (ADR-03 ruling): one token per direction, mounted only into
+# the two services that use it. egress-gateway never initiates connections to
+# vault-api and holds no credential that vault-api accepts; vault-api POLLS the
+# gateway for status and responses.
+# =============================================================================
+
+name: jarvis
+
+# -----------------------------------------------------------------------------
+# Shared hardening applied to every service (ADR-03).
+# -----------------------------------------------------------------------------
+x-hardening: &hardening
+  read_only: true
+  user: "10001:10001"
+  cap_drop: [ALL]
+  security_opt:
+    - "no-new-privileges:true"
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+  init: true
+  restart: unless-stopped
+  # host-gateway makes host.docker.internal resolve on Linux engines (WSL2
+  # native engine, Crostini) as well as on Docker Desktop / OrbStack (F-08).
+  # On internal-only networks the entry is inert: there is no route to it.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "3"
+
+x-python-healthcheck: &python-healthcheck
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 20s
+
+# llm-proxy has two mutually exclusive variants (see the two services below).
+x-llm-proxy: &llm-proxy-base
+  <<: *hardening
+  build:
+    context: ./services/llm-proxy
+    args:
+      BASE_IMAGE: "python:3.12.7-slim-bookworm@sha256:<PIN_ME>"
+  image: jarvis/llm-proxy:2.0.0
+  environment:
+    LLM_PROXY_LISTEN: "0.0.0.0:11434"
+    # Allowlist: POST /api/chat, POST /api/generate (stream:false, model ==
+    # OLLAMA_MODEL; think forced false, temperature 0, num_ctx and keep_alive
+    # capped; ADR-10), GET /api/tags, GET /api/version. Everything else,
+    # including /api/pull, /api/push, /api/create, /api/delete, /api/copy and
+    # /api/blobs, returns 403 (F-07).
+    OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b-it-qat}"
+    OLLAMA_NUM_CTX: "${OLLAMA_NUM_CTX:-8192}"
+    OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-15m}"
+  secrets:
+    - jarvis_vault_to_llm_token   # verifies inbound vault calls only
+  healthcheck:
+    <<: *python-healthcheck
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11434/healthz', timeout=3)"]
+  deploy:
+    resources:
+      limits:
+        pids: 64
+        cpus: "0.5"
+        memory: "${LLM_PROXY_MEM_LIMIT:-48M}"
+
+x-ollama: &ollama-base
+  <<: *hardening
+  # Thin wrapper over the pinned upstream image: only creates /models owned by
+  # 10001:10001 so the named volume is initialised with the service UID
+  # (ADR-09). No other changes to the upstream binary.
+  build:
+    context: ./services/ollama
+    args:
+      BASE_IMAGE: "ollama/ollama:0.4.7@sha256:<PIN_ME>"
+  image: jarvis/ollama:2.0.0
+  environment:
+    OLLAMA_HOST: "0.0.0.0:11434"     # inside llm_net only; no published port
+    OLLAMA_MODELS: /models
+    OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-5m}"
+    OLLAMA_MAX_LOADED_MODELS: "1"
+    HOME: /tmp                       # Ollama writes an identity key under $HOME
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,size=256m
+  volumes:
+    - jarvis_ollama_models:/models
+  networks:
+    llm_net:
+      aliases: [ollama]
+  healthcheck:
+    test: ["CMD", "ollama", "list"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 30s
+
+services:
+  # ---------------------------------------------------------------------------
+  # edge — Caddy serving the static SPA bundle and reverse-proxying /api to
+  # vault-api. Static config, no application code, makes no outbound calls.
+  # Sets CSP, checks Host/Origin (DNS-rebinding defence), requires the CSRF
+  # header on state-changing requests (ADR-07), and sends
+  # `Cache-Control: no-store` on the app shell and all API responses (ADR-09). Admin API and auto-HTTPS are
+  # disabled in the Caddyfile.
+  # Built from a pinned Caddy base: the Dockerfile removes the file capability
+  # (cap_net_bind_service) from the caddy binary, which otherwise cannot exec
+  # under cap_drop ALL + no-new-privileges. Caddy listens on :3000 (> 1024).
+  # ---------------------------------------------------------------------------
+  edge:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: services/edge/Dockerfile
+      args:
+        BASE_IMAGE: "caddy:2.8.4-alpine@sha256:<PIN_ME>"
+        UI_BUILD_IMAGE: "node:22.11.0-alpine@sha256:<PIN_ME>"   # build stage only
+    image: jarvis/edge:2.0.0
+    environment:
+      XDG_CONFIG_HOME: /tmp/caddy-config
+      XDG_DATA_HOME: /tmp/caddy-data
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - edge_net
+      - vault_net
+    depends_on:
+      vault-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          pids: 64
+          cpus: "0.5"
+          memory: "${EDGE_MEM_LIMIT:-64M}"
+
+  # ---------------------------------------------------------------------------
+  # vault-api — database, DEK (memory only, after unlock), ingestion
+  # orchestration (watcher, hashing, parse jobs to the `parser` container via
+  # parse_spool, validation, reconciliation, DB writes), rules, scheduler
+  # (APScheduler), REST API. It never parses statement bytes itself (ADR-04).
+  # vault_net only: no route to the internet, no route to ollama except via
+  # llm-proxy (F-06). Boots LOCKED.
+  # ---------------------------------------------------------------------------
+  vault-api:
+    <<: *hardening
+    # Multi-stage build compiles SQLCipher from source (pinned version,
+    # checksum-verified) for linux/amd64 and linux/arm64; no reliance on
+    # prebuilt sqlcipher wheels (ADR-09, F-41). Mount points are created in
+    # the image owned by 10001:10001 so named volumes inherit that owner.
+    build:
+      context: ./services/vault-api
+      args:
+        BASE_IMAGE: "python:3.12.7-slim-bookworm@sha256:<PIN_ME>"
+    image: jarvis/vault-api:2.0.0
+    environment:
+      JARVIS_DATA_DIR: /var/lib/jarvis                # jarvis.db + vault.keyfile.json
+      JARVIS_STATEMENTS_DIR: /mnt/financials
+      INBOX_MODE: "${INBOX_MODE:-retain}"            # retain | consume (ADR-09)
+      JARVIS_BACKUP_DIR: /var/lib/jarvis-backups
+      JARVIS_IDLE_LOCK_MINUTES: "${JARVIS_IDLE_LOCK_MINUTES:-15}"
+      JARVIS_WATCH_POLLING: "true"                   # VirtioFS / 9P safe
+      JARVIS_WATCH_INTERVAL_SECONDS: "${JARVIS_WATCH_INTERVAL_SECONDS:-3}"
+      JARVIS_PARSE_MAX_FILE_MB: "${JARVIS_PARSE_MAX_FILE_MB:-25}"
+      JARVIS_PARSE_SPOOL_DIR: /spool
+      JARVIS_PARSE_TIMEOUT_SECONDS: "${JARVIS_PARSE_TIMEOUT_SECONDS:-120}"
+      JARVIS_ARGON2_MEMORY_KIB: "${JARVIS_ARGON2_MEMORY_KIB:-262144}"
+      JARVIS_ARGON2_TIME_COST: "${JARVIS_ARGON2_TIME_COST:-3}"
+      JARVIS_ARGON2_PARALLELISM: "${JARVIS_ARGON2_PARALLELISM:-1}"
+      JARVIS_LLM_ENABLED: "${JARVIS_LLM_ENABLED:-true}"  # false on `lite`
+      # Same hostname on every LLM profile: both llm-proxy variants register
+      # the `llm-proxy` alias on vault_net.
+      OLLAMA_BASE_URL: "http://llm-proxy:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b-it-qat}"
+      # vault -> gateway only: submit OutboundPayloadV1 and poll for
+      # status/responses. The gateway never calls vault-api.
+      EGRESS_INTERNAL_URL: "http://egress-gateway:8089"
+      EGRESS_POLL_INTERVAL_SECONDS: "${EGRESS_POLL_INTERVAL_SECONDS:-10}"
+      GATEKEEPER_COARSEN_MODE: "${GATEKEEPER_COARSEN_MODE:-bucket_100_usd}"
+      BIWEEKLY_ANCHOR_DATE: "${BIWEEKLY_ANCHOR_DATE:-}"  # fallback only (ADR-05)
+      TZ: "${TZ:-UTC}"
+    secrets:
+      - jarvis_vault_to_llm_token       # presented to llm-proxy
+      - jarvis_vault_to_gateway_token   # presented to egress-gateway
+    volumes:
+      # Statements inbox: READ-ONLY. vault-api needs it only to list new
+      # files and compute their sha256 (ingestion_log key, and the expected
+      # hash written into each parse job); it never parses the bytes. The
+      # `parser` container mounts the same directory read-only to parse.
+      # Must be an absolute host path (Compose
+      # does not expand `~`; a literal `~` would be treated as a relative
+      # directory). Default chosen by `./jarvis init` is a non-synced app
+      # directory (ADR-09), e.g. /Users/<you>/Library/Application Support/
+      # Jarvis/inbox on macOS. Optional consume mode (INBOX_MODE=consume) is
+      # applied by `./jarvis up` through a generated override file that adds
+      # a second, write-capable mount at /mnt/financials-consume used only to
+      # delete a file after it is imported and reconciled. Default: retain.
+      - "${FINANCIALS_HOST_DIR:?Set FINANCIALS_HOST_DIR to an absolute path in .env (./jarvis init does this)}:/mnt/financials:ro"
+      - jarvis_vault_data:/var/lib/jarvis
+      # Parse jobs out, JSON results in (tmpfs-backed; ADR-04).
+      - parse_spool:/spool
+      # Encrypted backups (ADR-08). Absolute path recommended; uid 10001 needs
+      # write access (./jarvis init grants it via ACL on Linux).
+      - "${JARVIS_BACKUP_HOST_DIR:-./backups}:/var/lib/jarvis-backups"
+    networks:
+      - vault_net
+    healthcheck:
+      <<: *python-healthcheck
+      # /healthz answers 200 while locked (reports {"locked": true}).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+    deploy:
+      resources:
+        limits:
+          pids: 128
+          cpus: "${VAULT_CPU_LIMIT:-1.5}"
+          memory: "${VAULT_MEM_LIMIT:-640M}"   # unlock transient; steady ~350 MB
+
+  # ---------------------------------------------------------------------------
+  # parser — untrusted statement parsing (ADR-04, F-13). OFX/QFX (ofxtools),
+  # CSV profiles, PDF plugins (pdfplumber) and OCR (rapidocr-onnxruntime)
+  # live in this image only.
+  #   * network_mode: none — no network interfaces except loopback.
+  #   * no Docker secrets, no DEK, no vault volume.
+  #   * statements inbox mounted read-only.
+  #   * the ONLY writable path is the tmpfs-backed `parse_spool` volume:
+  #     vault-api writes a job file (relative path + expected sha256), the
+  #     parser writes back plain JSON rows; vault-api validates them and is
+  #     the only writer to the DB. Read-only rootfs and no /tmp tmpfs:
+  #     scratch space, if any, is /spool/scratch (counts against the spool
+  #     size cap).
+  #   * per-job child process with CPU-time, address-space and wall-clock
+  #     limits; 25 MB input cap.
+  # ---------------------------------------------------------------------------
+  parser:
+    <<: *hardening
+    build:
+      context: ./services/parser
+      args:
+        BASE_IMAGE: "python:3.12.7-slim-bookworm@sha256:<PIN_ME>"
+    image: jarvis/parser:2.0.0
+    network_mode: none
+    # Overrides from the shared anchor: no /tmp tmpfs (parse_spool is the only
+    # writable path) and no extra_hosts (meaningless, and rejected by Docker,
+    # with network_mode: none).
+    tmpfs: []
+    extra_hosts: []
+    environment:
+      PARSER_SPOOL_DIR: /spool
+      PARSER_STATEMENTS_DIR: /mnt/financials
+      PARSER_MAX_FILE_MB: "${JARVIS_PARSE_MAX_FILE_MB:-25}"
+      PARSER_JOB_CPU_SECONDS: "60"
+      PARSER_JOB_WALL_SECONDS: "90"
+      PARSER_JOB_ADDRESS_SPACE_MIB: "768"
+      TMPDIR: /spool/scratch
+      OMP_NUM_THREADS: "1"
+    volumes:
+      - "${FINANCIALS_HOST_DIR:?Set FINANCIALS_HOST_DIR to an absolute path in .env (./jarvis init does this)}:/mnt/financials:ro"
+      - parse_spool:/spool
+    healthcheck:
+      <<: *python-healthcheck
+      # No network: health = the worker loop refreshed its heartbeat file
+      # within the last 30 s.
+      test: ["CMD", "python", "-I", "-c", "import os,sys,time; sys.exit(0 if time.time()-os.stat('/spool/parser.heartbeat').st_mtime < 30 else 1)"]
+    deploy:
+      resources:
+        limits:
+          pids: 64
+          cpus: "${PARSER_CPU_LIMIT:-1.0}"
+          memory: "${PARSER_MEM_LIMIT:-384M}"   # OCR peaks; steady budget ~200 MB
+
+  # ---------------------------------------------------------------------------
+  # llm-proxy — Ollama endpoint allowlist. Two variants, because Compose cannot
+  # attach a network to a service conditionally per profile:
+  #
+  #   llm-proxy       (windows-gpu, cpu, lite-llm) vault_net + llm_net only.
+  #                   Upstream is the `ollama` container; fully internal.
+  #   llm-proxy-host  (mac) vault_net + llm_host_net. Upstream is native
+  #                   Ollama at host.docker.internal:11434. llm_host_net is a
+  #                   normal bridge, so this variant technically has an
+  #                   outbound route; it is the only service on that bridge,
+  #                   its upstream is fixed in config, and it has no secrets
+  #                   beyond the vault-to-llm token.
+  #
+  # Both register the alias `llm-proxy` on vault_net so vault-api config is
+  # identical on every profile. Never enable two LLM profiles at once
+  # (`./jarvis up` enforces this).
+  # ---------------------------------------------------------------------------
+  llm-proxy:
+    <<: *llm-proxy-base
+    profiles: ["windows-gpu", "cpu", "lite-llm"]
+    environment:
+      LLM_PROXY_LISTEN: "0.0.0.0:11434"
+      LLM_PROXY_UPSTREAM: "http://ollama:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b-it-qat}"
+    networks:
+      vault_net:
+        aliases: [llm-proxy]
+      llm_net: {}
+
+  llm-proxy-host:
+    <<: *llm-proxy-base
+    profiles: ["mac"]
+    environment:
+      LLM_PROXY_LISTEN: "0.0.0.0:11434"
+      LLM_PROXY_UPSTREAM: "http://host.docker.internal:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b-it-qat}"
+    networks:
+      vault_net:
+        aliases: [llm-proxy]
+      llm_host_net: {}
+
+  # ---------------------------------------------------------------------------
+  # egress-gateway — the only service that can reach the internet with data.
+  # Cannot query the vault: it only accepts OutboundPayloadV1 on
+  # POST /internal/outbound (:8089, vault_net, vault-to-gateway token),
+  # re-validates schema + LeakVerifier, notifies (content-free push), serves
+  # the approval page on :8088, and calls the provider after approval.
+  # vault-api polls GET /internal/outbound/{id} for status and the response;
+  # the gateway never initiates a connection to vault-api and holds no secret
+  # that vault-api accepts (its token only verifies vault -> gateway calls). Outbound hosts are allowlisted in code (api.anthropic.com,
+  # generativelanguage.googleapis.com, the configured push host).
+  # :8088 is the only published port; :8089 is never published.
+  # ---------------------------------------------------------------------------
+  egress-gateway:
+    <<: *hardening
+    build:
+      context: ./services/egress-gateway
+      args:
+        BASE_IMAGE: "python:3.12.7-slim-bookworm@sha256:<PIN_ME>"
+    image: jarvis/egress-gateway:2.0.0
+    environment:
+      APPROVAL_LISTEN: "0.0.0.0:8088"
+      INTERNAL_LISTEN: "0.0.0.0:8089"
+      EGRESS_DATA_DIR: /var/lib/jarvis-egress
+      GATEKEEPER_MODE: "${GATEKEEPER_MODE:-manual}"
+      GATEKEEPER_COARSEN_MODE: "${GATEKEEPER_COARSEN_MODE:-bucket_100_usd}"
+      # Approval = WebAuthn passkey assertion from the owner's phone over a
+      # challenge embedding request_id || entry_hash || nonce; single use;
+      # expiry per JFF-ADR-000 (ADR-03 amendment).
+      APPROVAL_TTL_MINUTES: "10"
+      JARVIS_OWNER_TAILNET_LOGIN: "${JARVIS_OWNER_TAILNET_LOGIN:?Set JARVIS_OWNER_TAILNET_LOGIN in .env}"
+      PUSH_PROVIDER: "${PUSH_PROVIDER:-ntfy}"
+      NTFY_URL: "${NTFY_URL:-}"
+      NTFY_TOPIC: "${NTFY_TOPIC:-}"
+      CLOUD_PROVIDER: "${CLOUD_PROVIDER:-none}"
+      TZ: "${TZ:-UTC}"
+    secrets:
+      - jarvis_vault_to_gateway_token   # verifies inbound vault calls only
+      - gatekeeper_hmac_secret
+      - anthropic_api_key
+      - gemini_api_key
+      - push_credentials
+      - pii_blocklist
+    volumes:
+      - jarvis_egress_data:/var/lib/jarvis-egress
+    ports:
+      - "127.0.0.1:8088:8088"
+    networks:
+      - vault_net
+      - egress_net
+    healthcheck:
+      <<: *python-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8089/healthz', timeout=3)"]
+    deploy:
+      resources:
+        limits:
+          pids: 64
+          cpus: "0.5"
+          memory: "${EGRESS_MEM_LIMIT:-96M}"
+
+  # ---------------------------------------------------------------------------
+  # ollama — container LLM runtime for non-mac profiles. llm_net only
+  # (internal): it cannot pull, push, or reach the internet at runtime. Models
+  # are loaded with `./jarvis models pull` (the `models-pull` service below).
+  # Two variants because GPU reservation cannot be toggled per profile.
+  # ---------------------------------------------------------------------------
+  ollama:
+    <<: *ollama-base
+    profiles: ["cpu", "lite-llm"]
+    deploy:
+      resources:
+        limits:
+          cpus: "${OLLAMA_CPU_LIMIT:-2.0}"
+          memory: "${OLLAMA_MEM_LIMIT:-4G}"
+          pids: 256
+
+  ollama-gpu:
+    <<: *ollama-base
+    profiles: ["windows-gpu"]
+    deploy:
+      resources:
+        limits:
+          cpus: "${OLLAMA_CPU_LIMIT:-2.0}"
+          memory: "${OLLAMA_MEM_LIMIT:-4G}"
+          pids: 256
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # models-pull — one-shot, run by `./jarvis models pull` while the main stack
+  # may be stopped. Starts a temporary Ollama server on pull_net (internet
+  # access), pulls OLLAMA_MODEL into the shared volume, exits. Never part of
+  # the running stack (ADR-03).
+  # ---------------------------------------------------------------------------
+  models-pull:
+    <<: *ollama-base
+    profiles: ["models"]
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'ollama serve & sleep 3 && ollama pull "$$OLLAMA_MODEL" && kill %1'
+    environment:
+      OLLAMA_HOST: "127.0.0.1:11434"
+      OLLAMA_MODELS: /models
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma4:e4b-it-qat}"
+      HOME: /tmp
+    networks:
+      - pull_net
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
+          pids: 256
+
+  # ---------------------------------------------------------------------------
+  # n8n — OPTIONAL and UNSUPPORTED (ADR-07). Not part of the core stack.
+  # Own network only; it cannot reach vault_net, llm_net or egress-gateway.
+  # No published port by design. To use its UI, add a local
+  # docker-compose.override.yml publishing "127.0.0.1:5678:5678" and accept
+  # that you have added an internet-connected automation server to the host.
+  # ---------------------------------------------------------------------------
+  n8n:
+    <<: *hardening
+    image: "docker.n8n.io/n8nio/n8n:1.72.1@sha256:<PIN_ME>"
+    profiles: ["automation"]
+    environment:
+      N8N_USER_FOLDER: /home/node/data
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      N8N_ENCRYPTION_KEY_FILE: /run/secrets/n8n_encryption_key
+    secrets:
+      - n8n_encryption_key
+    volumes:
+      - jarvis_n8n_data:/home/node/data
+    networks:
+      - automation_net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5678/healthz"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.5"
+          memory: "768M"
+
+networks:
+  edge_net:
+    driver: bridge
+  vault_net:
+    driver: bridge
+    internal: true
+  llm_net:
+    driver: bridge
+    internal: true
+  egress_net:
+    driver: bridge
+  llm_host_net:
+    driver: bridge
+  pull_net:
+    driver: bridge
+  automation_net:
+    driver: bridge
+
+volumes:
+  jarvis_vault_data:     # jarvis.db (SQLCipher) + vault.keyfile.json (wrapped DEK)
+  # Shared between vault-api and parser only. tmpfs-backed (RAM, never on
+  # disk, emptied when the volume is removed or the host restarts). A `tmpfs:`
+  # entry cannot be shared between containers, so this is a named volume
+  # using the local driver with tmpfs options. Owned by uid/gid 10001, 0700.
+  parse_spool:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=64m,uid=10001,gid=10001,mode=0700,nosuid,nodev,noexec"
+  jarvis_egress_data:    # gateway request store; holds no vault data
+  jarvis_ollama_models:
+  jarvis_n8n_data:
+
+# All created by `./jarvis init` (0444 files inside a 0700 directory).
+# Cloud/push files may be empty if the feature is unused.
+secrets:
+  jarvis_vault_to_llm_token:        # vault-api -> llm-proxy
+    file: ./.secrets/vault_to_llm_token
+  jarvis_vault_to_gateway_token:    # vault-api -> egress-gateway
+    file: ./.secrets/vault_to_gateway_token
+  gatekeeper_hmac_secret:
+    file: ./.secrets/gatekeeper_hmac_secret
+  anthropic_api_key:
+    file: ./.secrets/anthropic_api_key
+  gemini_api_key:
+    file: ./.secrets/gemini_api_key
+  push_credentials:
+    file: ./.secrets/push_credentials
+  pii_blocklist:            # LeakVerifier terms: your names, address, employer
+    file: ./.secrets/pii_blocklist
+  n8n_encryption_key:
+    file: ./.secrets/n8n_encryption_key

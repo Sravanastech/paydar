@@ -1,0 +1,18 @@
+[project]
+name = "paydar-eval"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["paydar-contracts"]
+
+[project.scripts]
+paydar-eval = "paydar_eval.cli:entry"
+
+[tool.uv.sources]
+paydar-contracts = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paydar_eval"]
