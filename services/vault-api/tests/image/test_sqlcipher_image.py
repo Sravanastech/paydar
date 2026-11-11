@@ -91,3 +91,18 @@ def test_image_encrypts(platform: str) -> None:
 @pytest.mark.parametrize("platform", PLATFORMS)
 def test_image_runs_as_uid_10001(platform: str) -> None:
     assert _run(platform, "id", "-u").stdout.strip() == "10001"
+
+
+@pytest.mark.image
+@needs_images
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_image_compile_options(platform: str) -> None:
+    code = (
+        "import sqlcipher3; c = sqlcipher3.connect(':memory:'); "
+        "print('\\n'.join(r[0] for r in c.execute('PRAGMA compile_options').fetchall()))"
+    )
+    result = _run(platform, "python", "-c", code)
+    assert result.returncode == 0, result.stderr
+    options = result.stdout.split()
+    assert "TEMP_STORE=3" in options, options
+    assert "HAS_CODEC" in options, options

@@ -60,6 +60,12 @@ jobs:
           exit-code: "1"
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: paydar/vault-api:dev-arm64
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
       - uses: anchore/sbom-action@v0
         with:
           image: paydar/vault-api:dev-amd64
