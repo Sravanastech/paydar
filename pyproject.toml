@@ -8,10 +8,10 @@ dependencies = ["paydar-contracts", "paydar-vault-api", "paydar-fixtures", "payd
 dev = [
   "pytest>=8.3",
   "pytest-socket>=0.7",
-  "hypothesis>=6.112",
-  "ruff>=0.7",
+  "hypothesis>=6.170.17",
+  "ruff>=0.17.6",
   "mypy>=1.13",
-  "import-linter>=2.1",
+  "import-linter>=2.17",
   "pip-audit>=2.7",
 ]
 
